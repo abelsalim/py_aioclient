@@ -1,3 +1,4 @@
+import ssl
 import aiohttp
 import asyncio
 
@@ -33,6 +34,7 @@ class PyAioClient:
 
     def __init__(
         self,
+        ssl_verify: str | None = None,
         limit_connector: int = 0,
         cookies: dict[str, Any] | None = None
     ) -> None:
@@ -42,15 +44,19 @@ class PyAioClient:
         created asynchronously upon entering the `async with` context manager.
 
         Args:
+            ssl_verify: Controls SSL/TLS verification. Can be 'REQUIRED'
+                (default), 'OPTIONAL', or 'NONE'. Case-insensitive.
             limit_connector: Maximum number of simultaneous TCP connections.
                 A value of 0 means no limit (default).
             cookies: A dictionary of cookies to be sent with all requests.
                 Defaults to None.
 
         Attributes:
+            ssl_verify: The configured SSL verification mode (REQUIRED,
+                OPTIONAL, NONE).
             limit_connector: The configured connection limit.
-            cookies: The dictionary of cookies in use. Will be an empty
-                dict if none are provided.
+            cookies: The dictionary of cookies in use. This will be an
+                empty dict if none are provided.
             connector: The TCP connector for the session. Initialized as
                 `None` and created by the `async with` context manager.
             session: The aiohttp ClientSession. Initialized as `None` and
@@ -60,6 +66,7 @@ class PyAioClient:
         # --- Atributos configuráveis ---
         self.limit_connector = limit_connector
         self.cookies = cookies or {}
+        self.ssl_verify = (ssl_verify or 'required').upper()
 
         # --- Atributos de estado ---
         self.connector: aiohttp.TCPConnector | None = None
@@ -69,16 +76,39 @@ class PyAioClient:
         """Prepares and initializes the session for asynchronous requests.
 
         This magic method is the entry point for the asynchronous context
-        manager (`async with`). Its responsibility is to create I/O-bound
-        resources like the TCPConnector and the aiohttp.ClientSession, which
-        require an active event loop.
+        manager (`async with`). It creates I/O-bound resources like the
+        TCPConnector and aiohttp.ClientSession, which require an active
+        event loop.
+
+        An SSL context is configured based on `self.ssl_verify`:
+        - 'NONE': Disables hostname checking and SSL verification mode.
+        - 'OPTIONAL': Sets SSL verification mode to optional.
+        - 'REQUIRED' (or any other value): Sets SSL verification mode
+          to mandatory.
 
         Returns:
             The instance of the object, now ready to perform requests
             with an active session.
         """
 
-        self.connector = aiohttp.TCPConnector(limit=self.limit_connector)
+        ssl_context = ssl.create_default_context()
+
+        match getattr(ssl, f'CERT_{self.ssl_verify}'):
+            case ssl.CERT_NONE:
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+            case ssl.CERT_OPTIONAL:
+                ssl_context.verify_mode = ssl.CERT_OPTIONAL
+
+            case _:
+                ssl_context.verify_mode = ssl.CERT_REQUIRED
+
+        self.connector = aiohttp.TCPConnector(
+            limit=self.limit_connector,
+            ssl=ssl_context
+        )
+
         parameters: dict[str, Any] = {'connector': self.connector}
 
         if self.cookies:
@@ -110,7 +140,7 @@ class PyAioClient:
         self,
         limit: int,
         tasks: list[Awaitable[T]]
-    ) -> list[Awaitable[T]]:
+    ) -> list[T]:
         """Executes a list of awaitable tasks with a concurrency limit.
 
         This method uses an `asyncio.Semaphore` to ensure that no more
@@ -149,7 +179,7 @@ class PyAioClient:
         content_type: str | None = None,
         timeout: int | None = None,
         **kwargs: Any
-    ) -> list[Any] | Any:
+    ) -> Any | list[Any]:
         """Executes a single asynchronous HTTP request.
 
         This is the main method for making HTTP calls. It uses the session
@@ -197,7 +227,7 @@ class PyAioClient:
                         else getattr(response, attr_name)
                     )
 
-                    if callable(item):
+                    if item != response:
                         if attr_name == 'json':
                             return_list.append(
                                 await item(content_type=content_type)

@@ -5,33 +5,41 @@ from typing import Any, Awaitable
 async def request(
     url: str,
     method: str = 'get',
+    ssl_verify: str | None = None,
+    limit_connector: int | None = None,
+    cookies: dict[str, Any] | None = None,
     return_attrs: list[str] | None = None,
     **kwargs: Any
 ) -> Any:
     """Executes a single asynchronous HTTP request.
 
-    This high-level function is a convenient wrapper around the
-    PyAioClient class. It automatically handles the setup and teardown
-    of the client session, making it ideal for simple, one-off requests.
+    A high-level wrapper for making a single request. It automatically
+    manages the client session, making it ideal for one-off calls.
 
     Args:
-        method: The HTTP method to use (e.g., 'get', 'post').
         url: The target URL for the request.
+        method: The HTTP method, e.g., 'get' or 'post'.
+        ssl_verify: Path to a CA bundle file for SSL verification.
+        limit_connector: The total number of simultaneous connections.
+        cookies: A dictionary of cookies to include in the request.
         return_attrs: A list of response attributes to return.
-            Defaults to ['status'].
-        **kwargs: Additional keyword arguments passed directly to the
-            underlying client method, such as `params`, `json`,
-            `headers`, or `timeout`.
+            If None, defaults to `['status']`.
+        **kwargs: Additional arguments for the request, such as `params`,
+            `json`, `data`, `headers`, or `timeout`.
 
     Returns:
-        The result of the request, which can be a single value or a list
-        of values depending on `return_attrs`.
+        The requested attribute(s) from the response. The type depends
+        on the `return_attrs` list.
     """
 
-    async with PyAioClient() as client:
+    async with PyAioClient(
+        ssl_verify=ssl_verify,
+        limit_connector=limit_connector or 0,
+        cookies=cookies or {}
+    ) as client:
         return await client.client(
-            method=method,
             url=url,
+            method=method,
             return_attrs=return_attrs,
             **kwargs
         )
@@ -40,29 +48,39 @@ async def request(
 async def batch_requests(
     requests_params: list[dict[str, Any]],
     limit: int = 10,
+    ssl_verify: str | None = None,
+    limit_connector: int | None = None,
+    cookies: dict[str, Any] | None = None,
     common_return_attrs: list[str] | None = None
 ) -> list[Any]:
-    """Executes multiple asynchronous requests in a concurrent batch.
+    """Executes multiple asynchronous HTTP requests concurrently.
 
-    This function is designed for high-throughput scenarios, running
-    many requests concurrently while respecting a concurrency limit to
-    avoid overwhelming a server.
+    Designed for high-throughput, this function runs a batch of requests
+    with a concurrency limit to avoid overwhelming the server. It uses a
+    single client session for all requests.
 
     Args:
-        requests_params: A list of dictionaries, where each dict
-            contains the parameters for a single request call (e.g.,
-            {'method': 'get', 'url': '...', 'json': {...}}).
-        limit: The maximum number of requests to run concurrently.
-        common_return_attrs: A default list of return attributes to apply
-            to all requests in the batch. This can be overridden by
-            a 'return_attrs' key in an individual request's dictionary.
+        requests_params: A list of dicts, where each dict contains the
+            parameters for a single request (e.g., `{'url': '...'}`).
+        limit: The maximum number of concurrent requests.
+        ssl_verify: Path to a CA bundle file for SSL verification.
+        limit_connector: The total number of simultaneous connections for
+            the session.
+        cookies: A dictionary of cookies to share across all requests.
+        common_return_attrs: Default `return_attrs` for all requests.
+            Can be overridden by a `return_attrs` key within an
+            individual request's parameter dict.
 
     Returns:
-        A list containing the results of each request, preserving the
-        original order of the input `requests_params`.
+        A list with the results for each request, in the same order
+        as the input `requests_params`.
     """
 
-    async with PyAioClient() as client:
+    async with PyAioClient(
+        ssl_verify=ssl_verify,
+        limit_connector=limit_connector or 0,
+        cookies=cookies or {}
+    ) as client:
 
         tasks: list[Awaitable[Any]] = []
         for params in requests_params:
